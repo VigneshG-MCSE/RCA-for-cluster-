@@ -1,0 +1,115 @@
+Root Cause Analysis (RCA) Document
+Kubernetes Control Plane Node Failure
+Date: September 9, 2025
+Incident Duration: ~54 minutes (02:04 - 02:58 UTC)
+Affected Component: Control Plane Node (controlplane)
+Status: RESOLVED ✅
+
+1. Executive Summary
+The control plane node entered NotReady state due to a corrupted kubelet configuration file (kubelet.conf) containing invalid YAML syntax, which prevented the kubelet from starting. This was compounded by an IP address mismatch between the kubelet's API server endpoint configuration and the API server's TLS certificate.
+
+2. Timeline of Events
+Time (UTC)	Event
+02:04	Kubelet service started but failed repeatedly
+02:39	TLS certificate errors detected in logs (wrong IP)
+02:52	Kubelet entered auto-restart loop
+02:58	Corrupted YAML configuration discovered
+03:01	Kubelet configuration regenerated successfully
+03:03	Control plane node returned to Ready status
+3. Root Cause Analysis
+Primary Cause: Corrupted Kubelet Configuration
+File: /etc/kubernetes/kubelet.conf
+
+Error: yaml: line 5: mapping values are not allowed in this context
+
+Impact: Kubelet failed to start, preventing node registration and control plane operations
+
+Secondary Cause: IP Address Mismatch
+Kubelet Configuration: Pointed to https://192.168.36.10:6443
+
+API Server Certificate: Valid for 192.168.36.10 and 10.96.0.1
+
+API Server Configuration: Using --advertise-address=10.0.2.15
+
+Result: TLS handshake failures when kubelet tried to communicate with API server
+
+4. Evidence Collection
+Certificate Validation
+bash
+sudo openssl x509 -in /etc/kubernetes/pki/apiserver.crt -text -noout | grep -A 1 "Subject Alternative Name"
+# Output: IP Address:10.96.0.1, IP Address:192.168.36.10
+# Missing: 10.0.2.15 (API server's configured address)
+Kubelet Error Logs
+text
+E0909 02:58:25.233324 bootstrap.go:241] error loading config file: yaml: line 5: mapping values are not allowed
+E0909 02:39:22.426344 kubelet_node_status.go:96] tls: failed to verify certificate: x509: certificate is valid for 10.96.0.1, 192.168.36.10, not 127.0.0.1
+Service Status
+text
+containerd: active (running)
+cri-docker: active (running) 
+kubelet: activating (auto-restart) (Result: exit-code)
+5. Resolution Steps Taken
+Regenerated Kubelet Configuration
+
+bash
+sudo kubeadm init phase kubeconfig kubelet --apiserver-advertise-address 192.168.36.10
+Aligned API Server Configuration with Certificate
+
+Modified /etc/kubernetes/manifests/kube-apiserver.yaml
+
+Changed --advertise-address=10.0.2.15 to --advertise-address=192.168.36.10
+
+Updated liveness/readiness probe hosts from 10.0.2.15 to 192.168.36.10
+
+Restarted Kubelet Service
+
+bash
+sudo systemctl restart kubelet
+6. Contributing Factors
+Manual Configuration Edit: The kubelet.conf file was likely edited manually, introducing YAML syntax errors
+
+IP Address inconsistency: Cluster components configured with different IP addresses
+
+Lack of Configuration Validation: No automated checks for config file integrity
+
+Certificate-Configuration Mismatch: API server configured with IP not present in TLS certificate
+
+7. Preventive Measures
+Immediate Actions
+Create backups of critical config files before editing
+
+Implement configuration file syntax validation checks
+
+Document standard IP address configuration for the cluster
+
+Long-term Solutions
+Implement GitOps for Kubernetes configuration management
+
+Set up monitoring for config file integrity
+
+Establish certificate management procedures
+
+Create runbooks for common recovery scenarios
+
+Validation Procedures
+bash
+# Add to regular maintenance checks
+sudo kubeadm config validate
+sudo yamllint /etc/kubernetes/kubelet.conf
+sudo systemctl is-active kubelet
+8. Lessons Learned
+Configuration Management: Manual edits of critical config files require extreme caution and validation
+
+Certificate Awareness: Always verify certificate SANs when changing network configurations
+
+Dependency Understanding: Kubelet failure cascades to entire node functionality
+
+Recovery Procedures: Having automated recovery commands ready reduces downtime
+
+9. Status Update
+✅ RESOLVED - Control plane node returned to Ready status at 03:03 UTC
+✅ VERIFIED - All system pods operational, node accepting workloads
+✅ DOCUMENTED - RCA complete with preventive measures identified
+
+RCA Conducted By: Kubernetes Cluster Administrator
+Next Review Date: October 9, 2025
